@@ -1,84 +1,76 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
-from datetime import datetime
+from typing import List, Optional
 
-
-# 1. MARKET POSITION (Source: 10-K Risk Factors/Business)
-class ConcentrationRisk(BaseModel):
-    top_customer_revenue_percent: Optional[float] = Field(
-        None,
-        description="Percentage of total revenue from single largest customer. Source: 10-K Note 1 or Risk Factors."
-    )
-    government_contract_dependency: bool = Field(
-        ...,
-        description="True if material revenue comes from gov contracts. Source: 10-K Business."
-    )
-
-class MarketPosition(BaseModel):
-    reported_market_share: Optional[Literal["Leading", "Significant", "Minor", "N/A"]] = Field(
-        "N/A",
-        description="Self-reported position in primary market. Source: 10-K 'Competition' section."
-    )
-    competitor_names: List[str] = Field(
-        default_factory=list,
-        description="List of named competitors. Source: 10-K 'Competition' section."
-    )
-    concentration_risk: ConcentrationRisk
-    gross_margin_trend: Literal["Expanding", "Stable", "Contracting"] = Field(
-        ...,
-        description="3-year trend of Gross Margin. Calculated from Financials."
-    )
-
-
-# 2. PRODUCT PORTFOLIO (Source: 10-K Segment Reporting)
+# --- 1. SEGMENTATION (Raw Data from Notes) ---
 class ProductSegment(BaseModel):
-    segment_name: str = Field(..., description="Name of the operating segment.")
-    revenue_amount_mm: float
-    yoy_growth_percent: float
-    operating_margin_percent: Optional[float]
+    segment_name: str = Field(..., description="Name of the operating segment as reported.")
+    revenue_amount: float = Field(..., description="Raw revenue assigned to this segment.")
+    operating_income: Optional[float] = Field(None, description="Raw operating income or loss for this segment (if reported).")
+    assets: Optional[float] = Field(None, description="Raw identifiable assets assigned to this segment (if reported).")
 
-class InnovationPipeline(BaseModel):
-    rd_spending_ratio: float = Field(
-        ...,
-        description="R&D Expenses / Total Revenue. Source: Income Statement."
-    )
-    new_product_launches: bool = Field(
-        False,
-        description="Flag if 'new product launch' is mentioned in MD&A."
-    )
+class GeographicSegment(BaseModel):
+    region: str = Field(..., description="Geographic region name (e.g., 'North America', 'EMEA').")
+    revenue_amount: float = Field(..., description="Raw revenue attributed to this region.")
 
-class ProductPortfolio(BaseModel):
-    revenue_mix: List[ProductSegment] = Field(
-        ...,
-        description="Breakdown of operating segments. Source: 10-K/10-Q Notes 'Segment Information'."
+# --- 2. MARKET POSITION & RISK (Text Extraction) ---
+class MarketPosition(BaseModel):
+    competitors: List[str] = Field(
+        default_factory=list, 
+        description="List of specific competitor names extracted from 'Competition' section."
     )
-    innovation_pipeline: InnovationPipeline
-
-# 3. CUSTOMER HEALTH (Source: Balance Sheet/MD&A)
-class DemandIndicators(BaseModel):
-    backlog_amount_mm: Optional[float] = Field(
-        None,
-        description="Total value of unfilled orders. Source: 10-K 'Backlog' or MD&A."
+    major_customers: List[str] = Field(
+        default_factory=list, 
+        description="Names of significant customers if explicitly disclosed."
     )
-    deferred_revenue_growth: Optional[float] = Field(
-        None,
-        description="YoY growth of Deferred Revenue (Liability). Source: Balance Sheet."
+    
+    # Concentration Risk (Raw facts only)
+    top_customer_revenue_percent: Optional[float] = Field(
+        None, 
+        description="Percentage of total revenue derived from the largest single customer (if stated)."
     )
-    inventory_turnover: Optional[float] = Field(
-        None,
-        description="Calculated: COGS / Average Inventory. Source: Financial Statements."
+    government_contract_dependency: Optional[bool] = Field(
+        None, 
+        description="True if the company explicitly states a material dependency on government contracts."
     )
 
-class CustomerHealth(BaseModel):
-    demand_indicators: DemandIndicators
+# --- 3. BUSINESS CHARACTERISTICS (Structural Facts from Item 1) ---
+class BusinessCharacteristics(BaseModel):
+    # Seasonality
+    is_seasonal: Optional[bool] = Field(
+        None, 
+        description="True if the business self-identifies as seasonal."
+    )
+    seasonality_desc: Optional[str] = Field(
+        None, 
+        description="Short excerpt describing the seasonal pattern (e.g., 'Sales generally higher in Q4')."
+    )
+    
+    # Operational Scale
+    employees_total: Optional[int] = Field(
+        None, 
+        description="Total number of full-time employees."
+    )
+    backlog_amount: Optional[float] = Field(
+        None, 
+        description="Total dollar value of backlog or remaining performance obligations (RPO)."
+    )
+    
+    # Supply & Distribution
+    significant_raw_materials: List[str] = Field(
+        default_factory=list, 
+        description="List of critical raw materials or components mentioned as potential supply chain risks."
+    )
+    distribution_channels: List[str] = Field(
+        default_factory=list, 
+        description="Primary methods of distribution extracted (e.g., 'Direct-to-consumer', 'Wholesale')."
+    )
 
-
-# 4. MASTER FACET SCHEM
+# --- 4. MASTER FACET ---
 class MarketProductFacet(BaseModel):
     """
-    The structured output for the 'MARKET_PRODUCT' facet in HSDB.
-    Sources: 10-K/10-Q (Segment Notes, Risk Factors, MD&A).
+    HSDB Facet: Market & Product
     """
+    product_segments: List[ProductSegment] = Field(default_factory=list)
+    geographic_segments: List[GeographicSegment] = Field(default_factory=list)
     market_position: MarketPosition
-    product_portfolio: ProductPortfolio
-    customer_health: CustomerHealth
+    business_characteristics: BusinessCharacteristics
