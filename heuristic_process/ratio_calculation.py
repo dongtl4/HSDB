@@ -1,7 +1,6 @@
 import pandas as pd
 from typing import Dict, Optional
 from dotenv import load_dotenv
-from agno.agent import Agent
 
 # 1. Import Schema
 from schema.financial_health_schema import (
@@ -9,14 +8,13 @@ from schema.financial_health_schema import (
     ProfitabilityRatios, EfficiencyRatios, CashFlowRatios
 )
 
-# 2. Import Logic (Reuse, Don't Rewrite)
-from utils.concept_fetching import (
-    process_fetch_request, DB_CONFIG, DEEPSEEK_AGENT, NEEDED_CONCEPTS
+# 2. Import Updated Logic
+from heuristic_process.concept_fetching import (
+    process_fetch_request, DB_CONFIG, NEEDED_CONCEPTS
 )
 
 load_dotenv()
 
-# --- Helpers ---
 def to_series(data_dict: Optional[Dict[str, float]]) -> Optional[pd.Series]:
     if not data_dict: return None
     s = pd.Series(data_dict)
@@ -30,22 +28,23 @@ def safe_math(op, s1: Optional[pd.Series], s2: Optional[pd.Series]) -> Optional[
         res = res.replace([float('inf'), -float('inf')], None).dropna()
         if not res.empty:
             res.index = res.index.strftime('%Y-%m-%d')
-            
         return res.to_dict()
     except Exception as e:
         print(f"Math Error: {e}")
         return None
 
 # --- Main Logic ---
-def calculate_ratios(ticker: str, valid_from: str, filing_type: str = '10-Q', db_config: str = DB_CONFIG, process_agent: Agent = DEEPSEEK_AGENT, needed_concept: Dict = NEEDED_CONCEPTS):
-    # 1. Fetch Data using imported logic
-    raw_data = process_fetch_request(ticker, valid_from, filing_type, db_config, needed_concept, process_agent)
+# Removed process_agent parameter as concept_fetching now uses the internal OpenAI client
+def calculate_ratios(ticker: str, valid_from: str, filing_type: str = '10-Q', 
+                     db_config: Dict = DB_CONFIG, needed_concept: Dict = NEEDED_CONCEPTS):
+    
+    # 1. Fetch Data using the updated direct-client logic
+    raw_data = process_fetch_request(ticker, valid_from, filing_type, db_config, needed_concept)
     
     if not raw_data:
         print("No data fetched.")
-        return
+        return None
 
-    # 2. Convert to Pandas Series for easy math
     D = {k: to_series(v) for k, v in raw_data.items()}
     
     # 3. Calculate Ratios
