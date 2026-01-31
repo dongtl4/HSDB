@@ -1,13 +1,12 @@
-from agno.agent import Agent
-from agno.models.deepseek import DeepSeek
-from dotenv import load_dotenv
-load_dotenv()
-
-import json
-import re
-from typing import Dict, Any, Optional
-import psycopg2
 import os
+import re
+import json
+import psycopg2
+from typing import Dict, Any, Optional
+from dotenv import load_dotenv
+from openai import OpenAI 
+
+load_dotenv()
 
 # --- CONFIGURATION ---
 DB_CONFIG = {
@@ -18,8 +17,10 @@ DB_CONFIG = {
     "port": "5432"
 }
 
-DEEPSEEK_AGENT = Agent(
-    model=DeepSeek(id='deepseek-chat', api_key=os.getenv("DEEPSEEK_API_KEY")),
+# Initialize the DeepSeek client directly
+client = OpenAI(
+    api_key=os.getenv('DEEPSEEK_API_KEY'), 
+    base_url="https://api.deepseek.com"
 )
 
 # --- DEFINITIONS ---
@@ -108,18 +109,36 @@ INSTRUCTIONS:
 2. Prefer IDs ending in `|NO_DIM`.
 3. If not found, set value to null."""
 
+# --- HELPER: DIRECT DEEPSEEK CALL ---
+def _query_deepseek_direct(prompt: str) -> str:
+    """
+    Replaces Agent.run() with a direct OpenAI client call.
+    """
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "You are a financial data expert."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.0 
+        )
+        return response.choices[0].message.content or ""
+    except Exception as e:
+        print(f"[API ERROR] {e}")
+        return ""
+
 # --- Main Workflow ---
 def process_fetch_request(
     ticker: str, 
     valid_from_date: str, 
     filing_type: str = '10-Q', 
     db_config: Dict = DB_CONFIG, 
-    needed_concepts: Dict = NEEDED_CONCEPTS, 
-    process_agent: Agent = DEEPSEEK_AGENT
+    needed_concepts: Dict = NEEDED_CONCEPTS
 ) -> Dict[str, Dict[str, float]]:
     """
-    Returns a dictionary of extracted time-series data:
-    { 'revenue': {'2025-01-01': 1000.0, ...}, 'cogs': ... }
+    Returns a dictionary of extracted time-series data using direct DeepSeek calls.
     """
     print(f"--- Fetching Data for {ticker} ({valid_from_date}) ---")
     
@@ -129,10 +148,8 @@ def process_fetch_request(
         print("Snapshot not found.")
         return {}
     
-    # Handle DB return (data, meta)
     snapshot_data = snapshot_result[0]
     financials = snapshot_data.get('financials', {})
-    
     extracted_data = {}
 
     # 2. Iterate Statements
@@ -145,10 +162,13 @@ def process_fetch_request(
         simplified = simplify_tree_for_prompt(root_nodes)
         prompt = create_prompt(stmt_type, simplified, concepts_def)
         
-        # 4. LLM Call
-        response = process_agent.run(prompt)
+        # 4. LLM Call (Directly via helper)
+        content = _query_deepseek_direct(prompt)
+        
         try:
-            clean_json = re.sub(r"```json\n|```", "", response.content).strip()
+            # DeepSeek JSON mode usually doesn't need regex cleaning if response_format is set, 
+            # but keeping safety check for consistency.
+            clean_json = re.sub(r"```json\n|```", "", content).strip()
             mapped_ids = json.loads(clean_json)
         except json.JSONDecodeError:
             print(f"  [ERROR] LLM JSON invalid for {stmt_type}")
@@ -163,7 +183,6 @@ def process_fetch_request(
                 
             node = find_node_by_composite_id(root_nodes, composite_id)
             if node and 'data' in node:
-                # Convert string keys/values to appropriate types
                 clean_series = {}
                 for d, v in node['data'].items():
                     try:
