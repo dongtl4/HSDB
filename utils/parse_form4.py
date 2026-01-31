@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Literal, Union, Any
-from HSDB.utils.fetching import get_filing_paths
+from utils.fetching import get_filing_paths
 
 # --- 1. DETAILED PARSER ---
 def _parse_form4_details(xml_path: Path) -> List[Dict[str, Any]]:
