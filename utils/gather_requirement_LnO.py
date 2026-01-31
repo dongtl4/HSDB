@@ -4,13 +4,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
-from HSDB.utils.fetching import DEFAULT_ROOT, FOLDER_MAP, FILINGS_DIR_NAME, _parse_date, iter_filing_metadata
+from utils.fetching import DEFAULT_ROOT, FOLDER_MAP, FILINGS_DIR_NAME, _parse_date, iter_filing_metadata
 
 # --- CORE FUNCTIONS ---
 
 def find_anchor_10k(ticker: str, fiscal_year: int, root: Path = DEFAULT_ROOT) -> Optional[Dict]:
     """
-    2. Find the right 10-K for a given fiscal year.
+    2. Find the metadata of right 10-K filing for a given fiscal year.
     Handles cases with multiple 10-Ks by selecting the one with the LATEST filing date.
     """
     all_10ks = iter_filing_metadata(ticker, "10-K", root)

@@ -10,7 +10,7 @@ from openai import OpenAI
 # Internal imports for the test suite
 from utils.gather_requirement_LnO import find_anchor_10k, find_secondary_anchor, find_context_filings
 from utils.trigger_filter import filter_for_deepseek_usage
-from utils.fetching import DEFAULT_ROOT, FOLDER_MAP, FILINGS_DIR_NAME, get_filing_paths, iter_filing_metadata, _load_json
+from utils.fetching import DEFAULT_ROOT, FOLDER_MAP, FILINGS_DIR_NAME
 
 load_dotenv()
 
@@ -183,3 +183,85 @@ def fetching_from_8K(combined_8k_text: str) -> Dict[str, Any]:
     """
     
     return _query_deepseek(combined_8k_text, system_prompt, user_instruction, "8-K")
+
+
+# --- TEST SUITE ---
+
+if __name__ == "__main__":
+    import sys
+    
+    # Ensure we use the configuration from utils.fetching
+    # DEFAULT_ROOT is Path("./") and FILINGS_DIR_NAME is "SnP500_filings"
+
+    test_ticker = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
+    test_year = sys.argv[2] if len(sys.argv) > 2 else "2017"
+
+    def load_primary_content(meta: dict) -> str:
+        """
+        Locates and reads the primary document using the metadata.
+        Prioritizes the pre-calculated '_source_path' from iter_filing_metadata.
+        """
+        # 1. Determine the folder path
+        if '_source_path' in meta:
+             # Best practice: Use the path already found by the iterator
+            instance_dir = Path(meta['_source_path'])
+        else:
+            # Fallback: Reconstruct path strictly obeying utils/fetching.py structure
+            folder_type = FOLDER_MAP.get(meta['form'], meta['form'])
+            # CRITICAL FIX: Include FILINGS_DIR_NAME in the path
+            instance_dir = DEFAULT_ROOT / FILINGS_DIR_NAME / meta['ticker'] / folder_type / f"{meta['filing_date']}_{meta['accession_number']}"
+        
+        # 2. Identify the Primary Document file
+        primary_file_info = next((f for f in meta.get('saved_files', []) 
+                                if f.get('purpose') == 'Primary Document'), None)
+        
+        if primary_file_info:
+            full_path = instance_dir / primary_file_info['saved_as']
+            if full_path.exists():
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+        return ""
+
+    print(f"--- Starting LnO Heuristic Test for {test_ticker} (FY {test_year}) ---")
+
+    # 1. Locate and process 10-K
+    meta_10k = find_anchor_10k(test_ticker, test_year)
+    if meta_10k:
+        content_10k = load_primary_content(meta_10k)
+        if content_10k:
+            print(f"[1/3] Processing 10-K for {test_ticker} (FY {test_year})")
+            res_10k = fetching_from_10K(content_10k)
+            print(json.dumps(res_10k, indent=4))
+            
+            # 2. Locate and process Proxy (DEF 14A)
+            meta_def = find_secondary_anchor(test_ticker, meta_10k['filing_date'])
+            if meta_def:
+                content_def = load_primary_content(meta_def)
+                if content_def:
+                    print(f"\n[2/3] Processing DEF 14A")
+                    res_def = fetching_from_DEF14A(content_def)
+                    print(json.dumps(res_def, indent=4))
+
+                    # 3. Locate and process 8-Ks
+                    metas_8k, _ = find_context_filings(test_ticker, meta_def['filing_date'])
+                    if metas_8k:
+                        print(f"\n[3/3] Processing {len(metas_8k)} 8-K filings...")
+                        combined_8k = ""
+                        for m8 in metas_8k:
+                            c8 = load_primary_content(m8)
+                            if c8:
+                                combined_8k += f"\n--- FILING: {m8['filing_date']} ---\n{c8}"
+                        
+                        if combined_8k:
+                            res_8k = fetching_from_8K(combined_8k)
+                            print(json.dumps(res_8k, indent=4))
+                    else:
+                        print("\n[3/3] No 8-K filings found in the context window.")
+                else:
+                    print(f"\n[!] DEF 14A found but content could not be loaded.")
+            else:
+                print(f"\n[!] DEF 14A not found after 10-K date.")
+        else:
+             print(f"[!] 10-K metadata found but content file missing.")
+    else:
+        print(f"[!] No 10-K found for {test_ticker} in {test_year}")

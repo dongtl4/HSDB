@@ -3,7 +3,7 @@
 The data is organized by Ticker Symbol, then by Form Type, and finally by individual filing instances identified by date and accession number.
 
 ```text
-filings/
+SnP500_filings/
 └── [TICKER]/                      # e.g., AAPL, TSLA
     └── [FORM_TYPE]/               # e.g., 10-K, 10-Q, Insider_Trading
         └── [YYYY-MM-DD]_[ACCESSION]/ 
