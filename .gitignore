@@ -6,3 +6,4 @@ Scripts/*
 test_output/*
 temp/*
 include/*
+.env
