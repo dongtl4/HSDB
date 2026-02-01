@@ -4,70 +4,116 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 # --- INTERNAL IMPORTS ---
-# Assumes extract_filings.py has been updated with the functions we wrote
 from heuristic_process.extract_filings import _query_model, extract_filing_item
 
 # ==============================================================================
 # TRACK A: QUANTITATIVE EXTRACTOR (Segments from R-Files)
 # ==============================================================================
 
-def identify_segment_file(metadata: Dict) -> Optional[str]:
+def identify_segment_sources(metadata: Dict) -> Dict[str, Optional[str]]:
     """
-    Uses LLM to select the most appropriate R-file for segment data.
+    Uses LLM to select up to TWO distinct source files:
+    1. One for Operating/Product Segments.
+    2. One for Geographic Information.
     """
-    # 1. Filter Potential Candidates (R-Files usually have document_type='HTML')
-    # We include 'purpose' and 'description' to help the LLM decide.
+    # 1. Filter Potential Candidates
     candidates = []
     for f in metadata.get('saved_files', []):
-        # We focus on HTML (tables) and maybe specific Markdown sections
         if f.get('document_type') == 'HTML' or "details" in (f.get('purpose') or "").lower():
             candidates.append(f"{f['saved_as']} | {f.get('purpose', 'N/A')} | {f.get('description', 'N/A')}")
 
     if not candidates:
-        return None
+        return {"product_source": None, "geo_source": None}
 
-    # Limit candidates to avoid context overflow (though R-lists are usually < 150 items)
     candidates_str = "\n".join(candidates[:150])
 
     prompt = """
-    You are an expert SEC filing analyzer. 
-    Your task is to identify the single specific file that contains the "Operating Segment" financial performance table.
+    You are an expert SEC filing analyzer.
+    Identify the best source files for TWO distinct categories of segment data.
     
-    CRITERIA FOR SELECTION:
-    1.  **Primary Goal:** Find the table showing Revenue and Operating Income (or Adjusted EBITDA) broken down by Business Segment (e.g., "Cloud", "Devices", "Services").
-    2.  **Secondary Goal:** If no business segment table exists, find the "Disaggregated Revenue" table. It might be in consolidated income statement table.
-    3.  **Keywords to Look For:** "Segment Information", "Results by Segment", "Operating Segments", "Reportable Segments", "Revenue by Product".
-    4.  **Avoid:** "Geographic" tables (unless mixed with products), "Eliminations" tables, or generic "Revenue Recognition" text policies.
-
-    EXAMPLES:
-    - Candidate: "HTML_R15.md | Details - Segment Information" -> SELECT
-    - Candidate: "HTML_R4.md | Details - Revenue" -> CHECK (If R15 doesn't exist, this might be it)
-    - Candidate: "HTML_R30.md | Details - Geographic Information" -> AVOID (Unless no product segment file exists)
-    - Candidate: "HTML_R2.md | Balance Sheet" -> REJECT
-
-    INPUT LIST:
+    INPUT CANDIDATES:
     {candidate_list}
 
-    INSTRUCTIONS:
-    - Analyze the input list.
-    - Return ONLY the filename of the best match.
-    - If no suitable file is found, return "None".
+    TASKS:
+    1. PRODUCT_SOURCE: Find the table showing "Operating Segments" (Revenue/Income by Business Unit).
+       - Keywords: "Segment Information", "Results by Segment", "Reportable Segments".
+    2. GEO_SOURCE: Find the table showing "Geographic Information" (Revenue by Country/Region).
+       - Keywords: "Geographic Information", "Revenue by Geography".
+       - Note: Often the same file as PRODUCT_SOURCE. If so, return the same filename.
+
+    OUTPUT JSON FORMAT:
+    {{
+        "product_source": "filename_or_null",
+        "geo_source": "filename_or_null"
+    }}
     """
 
-    response = _query_model(
-        prompt.format(candidate_list=candidates_str), 
-        context="",  # Context is embedded in prompt for this specific task
-        system_msg="You are a precise file selector."
-    )
+    try:
+        response = _query_model(
+            prompt.format(candidate_list=candidates_str), 
+            context="", 
+            system_msg="You are a precise file selector. Return JSON only."
+        )
+        clean_json = re.sub(r"```json\n|```", "", response).strip()
+        selection = json.loads(clean_json)
+        
+        # Validate existence
+        valid_files = [c.split(" | ")[0] for c in candidates]
+        
+        p_src = selection.get("product_source")
+        if p_src not in valid_files: p_src = None
+        
+        g_src = selection.get("geo_source")
+        if g_src not in valid_files: g_src = None
 
-    clean_filename = response.strip().replace("'", "").replace('"', "").split()[0] # basic cleanup
+        return {"product_source": p_src, "geo_source": g_src}
+
+    except Exception as e:
+        print(f"   [WARN] Selector failed: {e}")
+        return {"product_source": None, "geo_source": None}
+
+def _extract_segments_from_content(content: str, fiscal_year: int, mode: str = "BOTH") -> Dict[str, Any]:
+    """
+    Helper to run the extraction prompt on specific content.
+    mode: 'BOTH', 'PRODUCT_ONLY', 'GEO_ONLY'
+    """
+    # Adjust prompt focus based on mode
+    focus_instruction = ""
+    if mode == "PRODUCT_ONLY":
+        focus_instruction = "Focus ONLY on 'product_segments'. Return empty list for geographic."
+    elif mode == "GEO_ONLY":
+        focus_instruction = "Focus ONLY on 'geographic_segments'. Return empty list for product."
     
-    # Validation: Ensure the returned filename actually exists in the list
-    for c in candidates:
-        if c.startswith(clean_filename):
-            return clean_filename
-            
-    return None
+    context = content[:15000] # Limit context
+
+    prompt = f"""
+    You are a forensic accountant fixing a broken Markdown table from a 10-K filing.
+    TARGET FISCAL YEAR: {fiscal_year}
+
+    TASK:
+    Extract structured data. {focus_instruction}
+    
+    OUTPUT JSON SCHEMA:
+    {{
+        "product_segments": [
+            {{ "segment_name": "Cloud", "revenue_amount": 10230.5, "operating_income": 400.0, "assets": 5000.0 }}
+        ],
+        "geographic_segments": [
+            {{ "region": "North America", "revenue_amount": 50000.0 }}
+        ]
+    }}
+
+    RULES:
+    - Ignore "Total", "Eliminations", "Corporate".
+    - 'revenue_amount' is REQUIRED.
+    """
+
+    try:
+        response_str = _query_model(prompt, context, system_msg="You are a precise data extractor.")
+        clean_json = re.sub(r"```json\n|```", "", response_str).strip()
+        return json.loads(clean_json)
+    except Exception:
+        return {}
 
 def get_segment_data_from_metadata(
     ticker: str, 
@@ -75,89 +121,62 @@ def get_segment_data_from_metadata(
     fiscal_year: int
 ) -> Dict[str, Any]:
     """
-    Step 1: Locate and reconstruct the Quantitative Segment Table.
-    
-    Args:
-        ticker (str): Company ticker.
-        metadata (Dict): Content of metadata.json for the target 10-K.
-        fiscal_year (int): The target fiscal year to extract data for.
-
-    Returns:
-        Dict: JSON object containing 'product_segments' and 'geographic_segments'.
+    Step 1: Locate and reconstruct Quantitative Segment Tables (Dual Source Support).
     """
     print(f"--- [Track A] Extracting Segment Data for {ticker} (FY {fiscal_year}) ---")
     
-    # 1. FIND TARGET FILE (LLM Assisted)
-    print("   > Identifying Segment Table via LLM Selector...")
-    target_filename = identify_segment_file(metadata)
+    # 1. IDENTIFY SOURCES
+    sources = identify_segment_sources(metadata)
+    p_file = sources.get("product_source")
+    g_file = sources.get("geo_source")
+    
+    print(f"   > Product Source: {p_file}")
+    print(f"   > Geo Source:     {g_file}")
 
-    if not target_filename or target_filename == "None":
-        print("   [WARN] LLM could not identify a Segment R-file.")
-        # Optional: Fallback to old heuristic here if desired, or return empty
+    if not p_file and not g_file:
+        print("   [WARN] No segment files identified.")
         return {}
 
-    print(f"   > Selected Target File: {target_filename}")
+    final_data = {"product_segments": [], "geographic_segments": []}
+    
+    # 2. RESOLVE PATHS
+    base_path = Path(metadata.get('_source_path', '.'))
 
-    # 2. RESOLVE PATH
-    if '_source_path' in metadata:
-        file_path = Path(metadata['_source_path']) / target_filename
+    # 3. EXTRACTION STRATEGY
+    
+    # Case A: Same File (or only one exists)
+    if p_file == g_file and p_file is not None:
+        path = base_path / p_file
+        if path.exists():
+            content = path.read_text(encoding='utf-8')
+            data = _extract_segments_from_content(content, fiscal_year, mode="BOTH")
+            final_data = data
+
+    # Case B: Distinct Files
     else:
-        file_path = Path(target_filename)
+        # Extract Product
+        if p_file:
+            path = base_path / p_file
+            if path.exists():
+                print("   > Extracting Product Data...")
+                content = path.read_text(encoding='utf-8')
+                data = _extract_segments_from_content(content, fiscal_year, mode="PRODUCT_ONLY")
+                final_data["product_segments"] = data.get("product_segments", [])
 
-    if not file_path.exists():
-        print(f"   [ERR] Segment file not found at: {file_path}")
-        return {}
+        # Extract Geo
+        if g_file:
+            path = base_path / g_file
+            if path.exists():
+                print("   > Extracting Geographic Data...")
+                content = path.read_text(encoding='utf-8')
+                data = _extract_segments_from_content(content, fiscal_year, mode="GEO_ONLY")
+                final_data["geographic_segments"] = data.get("geographic_segments", [])
 
-    # 3. SEMANTIC RECONSTRUCTION
-    try:
-        raw_content = file_path.read_text(encoding='utf-8')
-        context = raw_content[:15000]
-
-        prompt = f"""
-        You are a forensic accountant fixing a broken Markdown table from a 10-K filing.
-        The table structure (rows/columns) may be wrapped or misaligned.
-
-        TARGET FISCAL YEAR: {fiscal_year}
-        (Focus on the most recent data column usually found on the left).
-
-        TASK:
-        Extract structured data for two categories based on the text provided:
-        1. "product_segments": Operating Segments (Revenue, Operating Income, Assets).
-        2. "geographic_segments": Geographic Regions (Revenue).
-
-        RULES:
-        - Ignore "Total", "Consolidated", "Eliminations", "Corporate" rows.
-        - If a value is wrapped to the next line, associate it with the preceding label.
-        - Convert all numbers to pure Floats (e.g., (500) -> -500.0).
-        - If 'Operating Income' or 'Assets' are not listed, set them to null.
-        - 'revenue_amount' is REQUIRED.
-
-        OUTPUT JSON SCHEMA:
-        {{
-            "product_segments": [
-                {{ "segment_name": "Cloud", "revenue_amount": 10230.5, "operating_income": 400.0, "assets": 5000.0 }}
-            ],
-            "geographic_segments": [
-                {{ "region": "North America", "revenue_amount": 50000.0 }}
-            ]
-        }}
-        """
-
-        response_str = _query_model(prompt, context, system_msg="You are a precise data extractor.")
-        
-        clean_json = re.sub(r"```json\n|```", "", response_str).strip()
-        data = json.loads(clean_json)
-        
-        prod_count = len(data.get('product_segments', []))
-        geo_count = len(data.get('geographic_segments', []))
-        print(f"   [Track A] Success: Found {prod_count} Products, {geo_count} Regions.")
-        
-        return data
-
-    except Exception as e:
-        print(f"   [ERR] Semantic Reconstruction failed: {e}")
-        return {}
-
+    prod_count = len(final_data.get('product_segments', []) or [])
+    geo_count = len(final_data.get('geographic_segments', []) or [])
+    print(f"   [Track A] Success: Found {prod_count} Products, {geo_count} Regions.")
+    
+    return final_data
 
 # ==============================================================================
 # TRACK B: QUALITATIVE EXTRACTOR (Context from Text)
@@ -166,12 +185,6 @@ def get_segment_data_from_metadata(
 def extract_business_context(filing_content: str) -> Dict[str, Any]:
     """
     Step 2: Extract qualitative business context from Item 1 (Business).
-    
-    Args:
-        filing_content (str): The full raw text of the 10-K/10-Q.
-
-    Returns:
-        Dict: JSON object mapping to MarketPosition and BusinessCharacteristics.
     """
     print(f"--- [Track B] Extracting Business Context ---")
 
