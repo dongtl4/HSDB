@@ -31,6 +31,10 @@ Every filing folder contains a metadata.json file. This is the "source of truth"
 * **Filing Date**: The date the document was officially submitted.
 * **Saved Files**: A list of all files in the folder, including their original purpose (e.g., "Primary Document" vs "Exhibits").
 
+For `metadata` of 10-K filing, it also stores:
+* **Fiscal year**: the fiscal year of the filing.
+* **Period of report**: the exact date that the fiscal year ended.
+
 2. **Primary Documents**
 Markdown (.md): Most filings (10-K, 10-Q, 8-K) are converted to Markdown for easy parsing and LLM compatibility.
 

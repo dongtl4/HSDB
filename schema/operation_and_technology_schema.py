@@ -1,99 +1,100 @@
-from pydantic import BaseModel, Field, model_validator
-from typing import Optional, Literal
-from datetime import datetime
+from pydantic import BaseModel, Field
+from typing import Optional, List
 
-
-# 1. SUPPLY CHAIN INTEGRITY (Source: 10-K Risk Factors)
-class SupplierConcentration(BaseModel):
-    single_source_dependency: Optional[bool] = Field(
-        None,
-        description="True if 'sole source' or 'single supplier' is mentioned in Risk Factors."
+# 1. SUPPLY CHAIN (Source: 10-K Item 1A Risk Factors, Item 7 MD&A)
+class SupplyChainData(BaseModel):
+    major_suppliers: Optional[List[str]] = Field(
+        default=None, 
+        description="List of specific entity names identified as major or sole suppliers."
     )
-    geographic_concentration: Optional[str] = Field(
-        None,
-        description="Region of high dependency if mentioned (e.g., 'manufacturing in China')."
+    geographic_dependencies: Optional[List[str]] = Field(
+        default=None,
+        description="List of regions or countries identified as critical for supply chain or manufacturing (e.g., 'manufacturing in China')."
     )
-
-class InventoryHealth(BaseModel):
-    days_sales_of_inventory: Optional[float] = Field(
-        None,
-        description="Calculated: (Average Inventory / COGS) * 365. Metric for efficiency."
-    )
-    inventory_build_up_flag: bool = Field(
-        False,
-        description="True if Inventory grew >20% faster than Revenue YoY (Sign of unsold goods)."
+    raw_material_volatility_snippet: Optional[str] = Field(
+        default=None,
+        description="Extracted snippet describing specific raw materials subject to price volatility or availability shortages."
     )
 
-class SupplyChainIntegrity(BaseModel):
-    supplier_concentration: SupplierConcentration
-    inventory_health: InventoryHealth
-
-# 2. OPERATIONAL INFRASTRUCTURE (Source: 10-K Item 2 & Cash Flow)
-class AssetProfile(BaseModel):
-    properties_model: Literal["Owned", "Leased", "Mixed", "Asset-Light"] = Field(
-        "Mixed",
-        description="Dominant term found in 10-K Item 2 'Properties'."
-    )
-    manufacturing_footprint_change: Optional[Literal["Expansion", "Contraction", "Stable"]] = Field(
-        None,
-        description="Inferred from 'Restructuring' (closing plants) or 'Capital Projects' (opening plants)."
-    )
-
-class CapexEfficiency(BaseModel):
-    capex_to_depreciation_ratio: Optional[float] = Field(
-        None,
-        description="Calculated: Capex / Depreciation & Amortization. >1.0 implies growth; <1.0 implies contraction."
-    )
-
-class OperationalInfrastructure(BaseModel):
-    asset_profile: AssetProfile
-    capex_efficiency: CapexEfficiency
-
-# 3. TECH & SECURITY (Source: 10-K Item 1C & 8-K Item 1.05)
-class CyberRiskPosture(BaseModel):
-    material_breach_detected: bool = Field(
-        False,
-        description="True if 8-K Item 1.05 filed (post-2023) or 'data breach' keywords in Risk Factors."
-    )
-    last_breach_date: Optional[str] = Field(
-        None,
-        description="Date of last disclosed incident."
-    )
-
-class PatentPortfolio(BaseModel):
-    total_issued_patents: Optional[int] = Field(
+# 2. INVENTORY (Source: 10-K Notes to Financial Statements)
+class InventoryBreakdown(BaseModel):
+    raw_materials_value: Optional[float] = Field(
         None, 
-        description="Total count of active patents held. Source: 10-K Item 1 'Intellectual Property'."
+        description="Reported value of Raw Materials inventory (in millions)."
     )
-    pending_applications: Optional[int] = Field(
+    work_in_process_value: Optional[float] = Field(
         None, 
-        description="Count of patents submitted/pending. A proxy for 'Future Innovation'. Source: 10-K Item 1."
+        description="Reported value of Work-in-Process inventory (in millions)."
     )
-    expiration_risk_year: Optional[int] = Field(
+    finished_goods_value: Optional[float] = Field(
         None, 
-        description="The year when 'material' patents begin to expire. Critical for Pharma/Tech. Source: 10-K."
+        description="Reported value of Finished Goods inventory (in millions)."
     )
 
-class IPMoatStatus(BaseModel):
-    portfolio_metrics: PatentPortfolio 
-    patent_cliff_warning: bool = Field(
-        False,
-        description="True if 'expiration' is listed as a Key Risk in Item 1A."
+# 3. OPERATIONAL INFRASTRUCTURE (Source: 10-K Item 2 Properties)
+class PropertyMetrics(BaseModel):
+    total_square_footage: Optional[float] = Field(
+        None, 
+        description="Total square footage of properties (office, manufacturing, retail, etc.)."
     )
-    active_ip_litigation: bool = Field(
-        False,
-        description="True if 'infringement' lawsuits are mentioned in Item 3 'Legal Proceedings'."
+    owned_square_footage: Optional[float] = Field(
+        None, 
+        description="Square footage of owned properties."
+    )
+    leased_square_footage: Optional[float] = Field(
+        None, 
+        description="Square footage of leased properties."
+    )
+    facilities_count: Optional[int] = Field(
+        None, 
+        description="Count of specific facilities (e.g., manufacturing plants, data centers, distribution centers)."
     )
 
-class TechnologySecurity(BaseModel):
-    cyber_risk_posture: CyberRiskPosture
-    ip_moat_status: IPMoatStatus
+# 4. TECHNOLOGY & IP (Source: 10-K Item 1 Business, Notes)
+class IntellectualProperty(BaseModel):
+    rd_expenses: Optional[float] = Field(
+        None, 
+        description="Research and development expenses for the period (in millions)."
+    )
+    patents_issued_count: Optional[int] = Field(
+        None, 
+        description="Total number of issued patents held."
+    )
+    patents_pending_count: Optional[int] = Field(
+        None, 
+        description="Total number of pending patent applications."
+    )
 
-# 4. MASTER FACET SCHEMA
+# 5. CYBERSECURITY (Source: 10-K Item 1C, 8-K Item 1.05)
+class SecurityIncident(BaseModel):
+    date_reported: Optional[str] = Field(
+        None, 
+        description="Date of the incident or disclosure."
+    )
+    description: Optional[str] = Field(
+        None, 
+        description="Brief description of the nature of the breach or incident."
+    )
+
+class CybersecurityPosture(BaseModel):
+    reported_incidents: Optional[List[SecurityIncident]] = Field(
+        default=None, 
+        description="List of material cybersecurity incidents disclosed in filings."
+    )
+    cyber_insurance_mentioned: bool = Field(
+        False, 
+        description="True if cyber insurance coverage is explicitly mentioned in Item 1C."
+    )
+
+# 6. MASTER FACET SCHEMA
 class OpsTechnologyFacet(BaseModel):
     """
     The structured output for the 'OPS_TECHNOLOGY' facet.
+    Focuses on extracting hard data points regarding supply chain, assets, IP, and security
+    without inferring subjective risks or calculating derived ratios.
     """
-    supply_chain_integrity: SupplyChainIntegrity
-    operational_infrastructure: OperationalInfrastructure
-    technology_and_security: TechnologySecurity
+    supply_chain: SupplyChainData
+    inventory_breakdown: InventoryBreakdown
+    operational_infrastructure: PropertyMetrics
+    intellectual_property: IntellectualProperty
+    cybersecurity: CybersecurityPosture
