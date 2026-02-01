@@ -73,115 +73,107 @@ def extract_page_number_format(filing_content: str, chunk_boundary: List[int] = 
 # ... [slice_filing_by_page_num and extract_raw_tables remain same logic, just ensure internal paths use resolve_path]
 
 # --- SPLIT BY ITEM ---
-SECTION_PATTERNS = {
-    "ITEM_1": {
-        "start": [r'(?:^|\n)\s*ITEM\s+1[\.\:\-]?\s+(?:BUSINESS)?'],
-        "end":   [r'(?:^|\n)\s*ITEM\s+1A[\.\:\-]?\s+', r'(?:^|\n)\s*ITEM\s+1B[\.\:\-]?\s+', r'(?:^|\n)\s*ITEM\s+2[\.\:\-]?\s+']
-    },
-    "ITEM_1A": {
-        "start": [r'(?:^|\n)\s*ITEM\s+1A[\.\:\-]?\s+(?:RISK\s+FACTORS)?'],
-        "end":   [r'(?:^|\n)\s*ITEM\s+1B[\.\:\-]?\s+', r'(?:^|\n)\s*ITEM\s+2[\.\:\-]?\s+']
-    },
-    "ITEM_7": {
-        "start": [r'(?:^|\n)\s*ITEM\s+7[\.\:\-]?\s+(?:MANAGEMENT)?'],
-        # Ends at 7A (Quant Risk) OR 8 (Financials) if 7A is skipped
-        "end":   [r'(?:^|\n)\s*ITEM\s+7A[\.\:\-]?\s+', r'(?:^|\n)\s*ITEM\s+8[\.\:\-]?\s+']
-    },
-    "ITEM_8": {
-        "start": [r'(?:^|\n)\s*ITEM\s+8[\.\:\-]?\s+(?:FINANCIAL)?'],
-        "end":   [r'(?:^|\n)\s*ITEM\s+9[\.\:\-]?\s+']
-    }
-}
-
-def extract_section(
+def extract_filing_item(
     filing_content: str, 
-    section_key: str, 
-    min_length: int = 2000
+    item_identifier: str, 
+    custom_end_markers: Optional[List[str]] = None,
+    min_length: int = 1500
 ) -> Optional[str]:
     """
-    Extracts the content of a specific Item from a 10-K/10-Q filing using the 
-    'Longest Block Heuristic' to avoid Table of Contents and Page Headers.
-
-    Args:
-        filing_content (str): The full raw text of the filing.
-        section_key (str): Key from SECTION_PATTERNS (e.g., "ITEM_1", "ITEM_7").
-        min_length (int): Minimum characters for a block to be considered valid.
-                          Defaults to 2000 (approx 1 page) to filter TOCs.
-
-    Returns:
-        Optional[str]: The extracted text block, or None if validation fails.
+    Generalized function to extract ANY Item from ANY filing using Longest Block Heuristic.
+    Updated to be Markdown-Resilient (ignores **, #, ##, etc.).
     """
-    patterns = SECTION_PATTERNS.get(section_key)
-    if not patterns:
-        print(f"[ERR] No patterns defined for section: {section_key}")
-        return None
-
-    # 1. FIND ALL MARKERS
-    # We compile with MULTILINE to handle start-of-line anchors correctly
-    start_matches = []
-    for p in patterns['start']:
-        start_matches.extend(re.finditer(p, filing_content, re.IGNORECASE | re.MULTILINE))
     
-    end_matches = []
-    for p in patterns['end']:
-        end_matches.extend(re.finditer(p, filing_content, re.IGNORECASE | re.MULTILINE))
+    # --- REGEX EXPLANATION ---
+    # 1. (?:^|\n)          -> Start of string or new line
+    # 2. \s* -> Optional whitespace
+    # 3. (?:[\#\*\_\-\>]+\s*)? -> OPTIONAL Markdown chars (#, *, _, -, >) followed by space
+    # 4. ITEM              -> Literal "ITEM" (Case Insensitive)
+    # 5. \s+               -> Required whitespace
+    # 6. ID + \b           -> The Item Number (e.g. "1") followed by a word boundary (prevents "1" matching "10")
+    
+    # Markdown-Resilient Regex Prefix
+    md_prefix = r'(?:^|\n)\s*(?:[\#\*\_\-\>]+\s*)?'
+    
+    start_pattern = md_prefix + r'ITEM\s+' + re.escape(item_identifier) + r'\b'
+    
+    # 2. DYNAMIC END PATTERN GENERATION
+    if custom_end_markers:
+        markers = custom_end_markers
+    else:
+        # Smart Inference for End Markers
+        markers = []
+        if item_identifier == "1":
+            markers = ["1A", "1B", "2"]
+        elif item_identifier == "7":
+            markers = ["7A", "8"]
+        elif item_identifier == "8":
+            markers = ["9", "9A"]
+        elif item_identifier.isdigit():
+            next_num = str(int(item_identifier) + 1)
+            markers = [f"{item_identifier}A", next_num]
+        elif item_identifier.endswith("A"):
+            base_num = item_identifier[:-1]
+            markers = [f"{base_num}B", str(int(base_num) + 1)]
+        else:
+            markers = ["SIGNATURES", "PART II", "PART III"]
 
-    # Sort by position in text
-    start_matches.sort(key=lambda x: x.start())
-    end_matches.sort(key=lambda x: x.start())
+    # Construct Regex for End Markers (Same MD resilience)
+    end_patterns = []
+    for m in markers:
+        end_patterns.append(md_prefix + r'ITEM\s+' + re.escape(m) + r'\b')
+    
+    # Add Generic "PART" boundaries
+    end_patterns.append(md_prefix + r'PART\s+(?:I|II|III|IV)\b')
 
-    if not start_matches:
-        print(f"[WARN] Start marker not found for {section_key}")
-        return None
+    # 3. EXTRACTION LOGIC
+    # Compile with IGNORECASE and MULTILINE
+    starts = [m for m in re.finditer(start_pattern, filing_content, re.IGNORECASE)]
+    
+    ends = []
+    for pat in end_patterns:
+        ends.extend(re.finditer(pat, filing_content, re.IGNORECASE))
+    
+    # Sort by position
+    starts.sort(key=lambda x: x.start())
+    ends.sort(key=lambda x: x.start())
 
     candidates = []
 
-    # 2. PAIRING LOGIC
-    # For every "Item X" found (could be 50+ due to headers/TOC), 
-    # find the NEAREST subsequent "Item Y" (End Marker).
-    for s_match in start_matches:
-        s_idx = s_match.start()
-        
-        # Filter for ends that appear AFTER this start
-        valid_ends = [e for e in end_matches if e.start() > s_idx]
+    for s in starts:
+        # Find nearest valid end after this start
+        valid_ends = [e for e in ends if e.start() > s.start()]
         
         if valid_ends:
-            # The closest valid end marks the boundary of this candidate block
-            e_match = valid_ends[0]
-            e_idx = e_match.start()
+            e = valid_ends[0]
+            length = e.start() - s.start()
             
-            length = e_idx - s_idx
-            
-            # 3. HEURISTIC FILTER
-            # TOC entries are usually < 500 chars. Page headers are < 100.
-            # Real sections are usually > 5,000 chars.
+            # Heuristic: Filter out TOC entries (usually small)
             if length > min_length:
                 candidates.append({
-                    'start': s_idx,
-                    'end': e_idx,
                     'length': length,
-                    'content': filing_content[s_idx:e_idx]
+                    'start': s.start(),
+                    'end': e.start(),
+                    'content': filing_content[s.start():e.start()]
                 })
 
-    # 4. SELECT WINNER
+    # 4. VALIDATION & SELECTION
     if not candidates:
-        print(f"[WARN] No valid block found for {section_key} > {min_length} chars.")
+        # Debugging: Print found starts to see if we are matching headers at all
+        if len(starts) > 0:
+            print(f"   [Logic] Found {len(starts)} start markers, but no valid end marker > {min_length} chars.")
+            # Optional: Print the first few start contexts for debugging
+            # print(f"Sample Start: {filing_content[starts[0].start():starts[0].start()+50]}")
+        else:
+            print(f"   [Logic] No start markers found for Item {item_identifier} (Regex: {start_pattern})")
+            
         return None
 
-    # The "Real" section is almost always the longest contiguous block.
-    # We sort by length descending.
-    best_candidate = max(candidates, key=lambda x: x['length'])
+    # Return the Longest Block
+    best_match = max(candidates, key=lambda x: x['length'])
     
-    # 5. VALIDATION (Basic)
-    # Ensure the content isn't just whitespace or junk
-    clean_content = best_candidate['content'].strip()
-    if len(clean_content) < min_length:
-        return None
-
-    print(f"--- Extracted {section_key}: {best_candidate['length']} chars "
-          f"(Start: {best_candidate['start']}, End: {best_candidate['end']}) ---")
-    
-    return clean_content
+    print(f"   [Logic] Extracted Item {item_identifier}: {best_match['length']} chars.")
+    return best_match['content'].strip()
 
 if __name__ == "__main__":
     if not os.path.exists(INPUT_FILE):
