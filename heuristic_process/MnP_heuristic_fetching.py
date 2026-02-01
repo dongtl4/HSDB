@@ -11,6 +11,64 @@ from heuristic_process.extract_filings import _query_model, extract_filing_item
 # TRACK A: QUANTITATIVE EXTRACTOR (Segments from R-Files)
 # ==============================================================================
 
+def identify_segment_file(metadata: Dict) -> Optional[str]:
+    """
+    Uses LLM to select the most appropriate R-file for segment data.
+    """
+    # 1. Filter Potential Candidates (R-Files usually have document_type='HTML')
+    # We include 'purpose' and 'description' to help the LLM decide.
+    candidates = []
+    for f in metadata.get('saved_files', []):
+        # We focus on HTML (tables) and maybe specific Markdown sections
+        if f.get('document_type') == 'HTML' or "details" in (f.get('purpose') or "").lower():
+            candidates.append(f"{f['saved_as']} | {f.get('purpose', 'N/A')} | {f.get('description', 'N/A')}")
+
+    if not candidates:
+        return None
+
+    # Limit candidates to avoid context overflow (though R-lists are usually < 150 items)
+    candidates_str = "\n".join(candidates[:150])
+
+    prompt = """
+    You are an expert SEC filing analyzer. 
+    Your task is to identify the single specific file that contains the "Operating Segment" financial performance table.
+    
+    CRITERIA FOR SELECTION:
+    1.  **Primary Goal:** Find the table showing Revenue and Operating Income (or Adjusted EBITDA) broken down by Business Segment (e.g., "Cloud", "Devices", "Services").
+    2.  **Secondary Goal:** If no business segment table exists, find the "Disaggregated Revenue" table. It might be in consolidated income statement table.
+    3.  **Keywords to Look For:** "Segment Information", "Results by Segment", "Operating Segments", "Reportable Segments", "Revenue by Product".
+    4.  **Avoid:** "Geographic" tables (unless mixed with products), "Eliminations" tables, or generic "Revenue Recognition" text policies.
+
+    EXAMPLES:
+    - Candidate: "HTML_R15.md | Details - Segment Information" -> SELECT
+    - Candidate: "HTML_R4.md | Details - Revenue" -> CHECK (If R15 doesn't exist, this might be it)
+    - Candidate: "HTML_R30.md | Details - Geographic Information" -> AVOID (Unless no product segment file exists)
+    - Candidate: "HTML_R2.md | Balance Sheet" -> REJECT
+
+    INPUT LIST:
+    {candidate_list}
+
+    INSTRUCTIONS:
+    - Analyze the input list.
+    - Return ONLY the filename of the best match.
+    - If no suitable file is found, return "None".
+    """
+
+    response = _query_model(
+        prompt.format(candidate_list=candidates_str), 
+        context="",  # Context is embedded in prompt for this specific task
+        system_msg="You are a precise file selector."
+    )
+
+    clean_filename = response.strip().replace("'", "").replace('"', "").split()[0] # basic cleanup
+    
+    # Validation: Ensure the returned filename actually exists in the list
+    for c in candidates:
+        if c.startswith(clean_filename):
+            return clean_filename
+            
+    return None
+
 def get_segment_data_from_metadata(
     ticker: str, 
     metadata: Dict, 
@@ -29,35 +87,21 @@ def get_segment_data_from_metadata(
     """
     print(f"--- [Track A] Extracting Segment Data for {ticker} (FY {fiscal_year}) ---")
     
-    # 1. FIND TARGET FILE
-    # Filter for file purpose containing "Segment" AND ("Revenue" OR "Information")
-    target_filename = None
-    for f in metadata.get('saved_files', []):
-        purpose = (f.get('purpose') or "").lower()
-        if "segment" in purpose and ("revenue" in purpose or "information" in purpose):
-            # Prioritize "Details" tables over "Narrative" text
-            if "details" in purpose:
-                target_filename = f['saved_as']
-                break
-    
-    # Fallback: If no "Details" found, try any segment file
-    if not target_filename:
-        for f in metadata.get('saved_files', []):
-            if "segment" in (f.get('purpose') or "").lower():
-                target_filename = f['saved_as']
-                break
+    # 1. FIND TARGET FILE (LLM Assisted)
+    print("   > Identifying Segment Table via LLM Selector...")
+    target_filename = identify_segment_file(metadata)
 
-    if not target_filename:
-        print("   [WARN] No dedicated Segment R-file found in metadata.")
+    if not target_filename or target_filename == "None":
+        print("   [WARN] LLM could not identify a Segment R-file.")
+        # Optional: Fallback to old heuristic here if desired, or return empty
         return {}
 
+    print(f"   > Selected Target File: {target_filename}")
+
     # 2. RESOLVE PATH
-    # Handles both pre-injected '_source_path' (from Manager) or assumes relative path
     if '_source_path' in metadata:
         file_path = Path(metadata['_source_path']) / target_filename
     else:
-        # Fallback: This might fail if strict pathing isn't handled by caller
-        print("   [WARN] Metadata missing '_source_path'. Assuming CWD.")
         file_path = Path(target_filename)
 
     if not file_path.exists():
@@ -67,7 +111,6 @@ def get_segment_data_from_metadata(
     # 3. SEMANTIC RECONSTRUCTION
     try:
         raw_content = file_path.read_text(encoding='utf-8')
-        # Limit context to first 15k chars (tables are usually compact)
         context = raw_content[:15000]
 
         prompt = f"""
@@ -102,7 +145,6 @@ def get_segment_data_from_metadata(
 
         response_str = _query_model(prompt, context, system_msg="You are a precise data extractor.")
         
-        # Strip Markdown and Parse
         clean_json = re.sub(r"```json\n|```", "", response_str).strip()
         data = json.loads(clean_json)
         
@@ -134,7 +176,6 @@ def extract_business_context(filing_content: str) -> Dict[str, Any]:
     print(f"--- [Track B] Extracting Business Context ---")
 
     # 1. SPLIT SECTION (Item 1)
-    # Using the generalized splitter we wrote earlier
     item_1_text = extract_filing_item(filing_content, "1")
     
     if not item_1_text:
@@ -142,7 +183,6 @@ def extract_business_context(filing_content: str) -> Dict[str, Any]:
         return {}
 
     # 2. LLM EXTRACTION
-    # We pass the first 25k chars of Item 1 (usually sufficient for Intro, Seasonality, Competition)
     context_chunk = item_1_text[:25000]
 
     prompt = """

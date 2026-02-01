@@ -81,19 +81,20 @@ def extract_filing_item(
 ) -> Optional[str]:
     """
     Generalized function to extract ANY Item from ANY filing using Longest Block Heuristic.
-    Updated to be Markdown-Resilient (ignores **, #, ##, etc.).
+    Updated to be Markdown-Resilient (ignores **, #, ##, > and | table markers).
     """
     
     # --- REGEX EXPLANATION ---
-    # 1. (?:^|\n)          -> Start of string or new line
+    # 1. (?:^|\n)             -> Start of string or new line
     # 2. \s* -> Optional whitespace
-    # 3. (?:[\#\*\_\-\>]+\s*)? -> OPTIONAL Markdown chars (#, *, _, -, >) followed by space
-    # 4. ITEM              -> Literal "ITEM" (Case Insensitive)
-    # 5. \s+               -> Required whitespace
-    # 6. ID + \b           -> The Item Number (e.g. "1") followed by a word boundary (prevents "1" matching "10")
+    # 3. (?:[\#\*\_\-\>\|]+\s*)? -> OPTIONAL Markdown chars (#, *, _, -, >, |) followed by space.
+    #                            Added '\|' to handle table rows like "| Item 1. | Business |"
+    # 4. ITEM                 -> Literal "ITEM" (Case Insensitive)
+    # 5. \s+                  -> Required whitespace
+    # 6. ID + \b              -> The Item Number (e.g. "1") followed by a word boundary
     
-    # Markdown-Resilient Regex Prefix
-    md_prefix = r'(?:^|\n)\s*(?:[\#\*\_\-\>]+\s*)?'
+    # Markdown-Resilient Regex Prefix (Updated with pipe for tables)
+    md_prefix = r'(?:^|\n)\s*(?:[\#\*\_\-\>\|]+\s*)?'
     
     start_pattern = md_prefix + r'ITEM\s+' + re.escape(item_identifier) + r'\b'
     
@@ -159,11 +160,8 @@ def extract_filing_item(
 
     # 4. VALIDATION & SELECTION
     if not candidates:
-        # Debugging: Print found starts to see if we are matching headers at all
         if len(starts) > 0:
             print(f"   [Logic] Found {len(starts)} start markers, but no valid end marker > {min_length} chars.")
-            # Optional: Print the first few start contexts for debugging
-            # print(f"Sample Start: {filing_content[starts[0].start():starts[0].start()+50]}")
         else:
             print(f"   [Logic] No start markers found for Item {item_identifier} (Regex: {start_pattern})")
             
