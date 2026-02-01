@@ -10,7 +10,7 @@ class ProductSegment(BaseModel):
 
 class GeographicSegment(BaseModel):
     region: str = Field(..., description="Geographic region name (e.g., 'North America', 'EMEA').")
-    revenue_amount: float = Field(..., description="Raw revenue attributed to this region.")
+    revenue_amount: Optional[float] = Field(None, description="Raw revenue attributed to this region.")
 
 # --- 2. MARKET POSITION & RISK (Text Extraction) ---
 class MarketPosition(BaseModel):
