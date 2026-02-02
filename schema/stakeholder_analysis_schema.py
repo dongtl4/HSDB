@@ -1,73 +1,90 @@
-from pydantic import BaseModel, Field, model_validator
-from typing import Optional, Literal
-from datetime import datetime
+from pydantic import BaseModel, Field
+from typing import Optional
 
-
-# 1. INVESTOR RELATIONS (Source: 8-K Item 5.07 & Financials)
-class ShareholderSentiment(BaseModel):
+# 1. SHAREHOLDER DEMOCRACY (Source: 8-K Item 5.07, DEF 14A, SC 13D)
+class ShareholderDemocracy(BaseModel):
     say_on_pay_support_percent: Optional[float] = Field(
         None,
-        description="Percentage of 'For' votes on executive comp. <70% implies anger. Source: 8-K Item 5.07."
+        description="Percentage of 'For' votes on executive comp. Source: 8-K Item 5.07."
+    )
+    director_election_min_support_percent: Optional[float] = Field(
+        None,
+        description="The lowest percentage of 'For' votes received by any director standing for election. <90% often signals specific dissatisfaction."
     )
     shareholder_proposals_count: int = Field(
         0,
-        description="Number of proposals submitted by shareholders (proxy for activism). Source: DEF 14A."
+        description="Number of proposals submitted by shareholders. Source: DEF 14A."
     )
-    activist_campaign_flag: bool = Field(
+    activist_13d_filing_count: int = Field(
+        0,
+        description="Count of SC 13D (Activist Stake) filings submitted in the period. Source: File System."
+    )
+
+# 2. LEGAL & REGULATORY (Source: 10-K Item 3 & Notes)
+class LegalAndRegulatory(BaseModel):
+    active_class_actions_flag: bool = Field(
         False,
-        description="True if 'settlement agreement' with activist investor is mentioned in 8-K."
-    )
-
-class CapitalReturn(BaseModel):
-    dividend_status: Literal["Growing", "Stable", "Cut", "None"] = Field(
-        "None",
-        description="3-year trend. 'Cut' is a major negative stakeholder signal."
-    )
-    total_returned_cash_mm: float = Field(
-        ...,
-        description="Dividends + Buybacks (Trailing 12M). Source: Cash Flow Statement."
-    )
-
-class InvestorRelations(BaseModel):
-    shareholder_sentiment: ShareholderSentiment
-    capital_return: CapitalReturn
-
-
-# 2. REGULATORY & COMMUNITY (Source: 10-K Item 3 & Notes)
-class LegalFriction(BaseModel):
-    active_class_actions: bool = Field(
-        False,
-        description="True if 'class action' is listed in Item 3 'Legal Proceedings'."
-    )
-    regulatory_investigation_flag: bool = Field(
-        False,
-        description="True if SEC/DOJ/FTC 'investigation' or 'subpoena' is disclosed."
+        description="True if 'class action' is explicitly listed in Item 3 'Legal Proceedings'."
     )
     loss_contingency_accrual_mm: Optional[float] = Field(
         None,
-        description="Reserved cash for legal settlements. Source: Notes 'Commitments and Contingencies'."
+        description="Reserved cash for legal settlements (Loss Contingency). Source: Notes to Financials."
     )
-
-class CommunityImpact(BaseModel):
+    unrecognized_tax_benefits_mm: Optional[float] = Field(
+        None,
+        description="Amount of unrecognized tax benefits (FIN 48 liability). Measure of aggressive tax positions. Source: Notes (Income Taxes)."
+    )
     environmental_fines_mm: float = Field(
         0.0,
-        description="Total fines disclosed related to EPA/Environmental. Source: 10-K Item 1 or 3."
+        description="Total fines disclosed related to EPA/Environmental matters. Source: 10-K."
     )
-    reputation_risk_disclosure: bool = Field(
+
+# 3. LABOR RELATIONS (Source: 10-K Item 1 'Human Capital')
+class LaborRelations(BaseModel):
+    # Unionization (Power)
+    unionized_workforce_percent: Optional[float] = Field(
+        None,
+        description="Percentage of employees represented by labor unions or collective bargaining agreements."
+    )
+    work_stoppage_flag: bool = Field(
         False,
-        description="True if 'reputation' or 'public perception' is explicitly listed as a Risk Factor."
+        description="True if 'strikes', 'work stoppages', or 'labor disputes' are disclosed as active risks or events."
+    )
+    
+    # Diversity (Demographics - Hard Data Only)
+    female_employee_percent: Optional[float] = Field(
+        None,
+        description="Global percentage of women in the workforce."
+    )
+    minority_employee_percent: Optional[float] = Field(
+        None,
+        description="Percentage of employees identifying as racial/ethnic minorities (US usually)."
+    )
+    
+    # Stability (Turnover)
+    voluntary_turnover_percent: Optional[float] = Field(
+        None,
+        description="Reported voluntary turnover rate. High turnover indicates internal friction."
     )
 
-class RegulatoryCommunity(BaseModel):
-    legal_friction: LegalFriction
-    community_impact: CommunityImpact
+# 4. CUSTOMER QUALITY (Source: 10-K Notes 'Product Warranty')
+class CustomerQuality(BaseModel):
+    warranty_provision_mm: Optional[float] = Field(
+        None,
+        description="New warranty accruals charged to expense during the period. High relative to revenue indicates quality issues."
+    )
+    warranty_liability_mm: Optional[float] = Field(
+        None,
+        description="Total ending balance of warranty liability."
+    )
 
-
-# 3. MASTER FACET SCHEMA
+# 5. MASTER FACET SCHEMA
 class StakeholderAnalysisFacet(BaseModel):
     """
     The structured output for the 'STAKEHOLDER_ANALYSIS' facet.
-    Focuses on Friction (Lawsuits/Fines) and Support (Votes/Capital).
+    Covers Shareholders, Government, Employees, and Customers.
     """
-    investor_relations: InvestorRelations
-    regulatory_community: RegulatoryCommunity
+    shareholder_democracy: ShareholderDemocracy
+    legal_and_regulatory: LegalAndRegulatory
+    labor_relations: LaborRelations
+    customer_quality: CustomerQuality
