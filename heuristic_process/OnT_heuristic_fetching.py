@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # --- INTERNAL IMPORTS ---
 # We rely on your existing extraction tools
 from heuristic_process.extract_filings import extract_filing_item
-from heuristic_process.LnO_heuristic_fetching import _query_deepseek
+from utils.llm_helper import query_deepseek
 
 load_dotenv()
 
@@ -110,7 +110,7 @@ def _extract_inventory_data(full_10k_text: str, metadata: Optional[Dict] = None)
     }}
     """
     
-    return _query_deepseek(source_text, system_prompt, user_instruction, "10-K")
+    return query_deepseek(source_text, system_prompt, user_instruction, "10-K")
 
 def _extract_supply_chain_and_ip(item_1_text: str, item_1a_text: str, item_7_text: str, metadata: Optional[Dict] = None) -> Dict[str, Any]:
     """
@@ -154,7 +154,7 @@ def _extract_supply_chain_and_ip(item_1_text: str, item_1a_text: str, item_7_tex
         }
     }
     """
-    return _query_deepseek(combined_text, system_prompt, user_instruction, "10-K")
+    return query_deepseek(combined_text, system_prompt, user_instruction, "10-K")
 
 def _extract_ops_infrastructure(item_2_text: str, metadata: Optional[Dict] = None) -> Dict[str, Any]:
     """
@@ -187,7 +187,7 @@ def _extract_ops_infrastructure(item_2_text: str, metadata: Optional[Dict] = Non
         // INSTRUCTION: Count distinct manufacturing plants, data centers, or labs mentioned.
     }
     """
-    return _query_deepseek(source_text, system_prompt, user_instruction, "10-K")
+    return query_deepseek(source_text, system_prompt, user_instruction, "10-K")
 
 def _extract_cyber_10k(item_1c_text: str) -> Dict[str, Any]:
     """
@@ -210,7 +210,7 @@ def _extract_cyber_10k(item_1c_text: str) -> Dict[str, Any]:
         // INSTRUCTION: List any material breaches disclosed in this section. If none, return empty list.
     }
     """
-    return _query_deepseek(item_1c_text, system_prompt, user_instruction, "10-K")
+    return query_deepseek(item_1c_text, system_prompt, user_instruction, "10-K")
 
 # --- MAIN ENTRY POINTS ---
 
@@ -270,4 +270,4 @@ def fetching_ONT_from_8K(filing_text: str) -> Optional[Dict[str, str]]:
         "description": "Brief summary of the incident disclosed."
     }
     """
-    return _query_deepseek(filing_text[:10000], system_prompt, user_instruction, "8-K")
+    return query_deepseek(filing_text[:10000], system_prompt, user_instruction, "8-K")

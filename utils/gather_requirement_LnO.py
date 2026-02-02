@@ -11,7 +11,7 @@ from utils.fetching import DEFAULT_ROOT, FOLDER_MAP, FILINGS_DIR_NAME, _parse_da
 def find_anchor_10k(ticker: str, fiscal_year: int, root: Path = DEFAULT_ROOT) -> Optional[Dict]:
     """
     2. Find the metadata of right 10-K filing for a given fiscal year.
-    Handles cases with multiple 10-Ks by selecting the one with the LATEST filing date.
+    Handles cases with multiple 10-Ks by selecting the one with the FIRST filing date (usually contain important items from 1 to 14).
     """
     all_10ks = iter_filing_metadata(ticker, "10-K", root)
     candidates = []
@@ -35,7 +35,7 @@ def find_anchor_10k(ticker: str, fiscal_year: int, root: Path = DEFAULT_ROOT) ->
     # Sort by filing_date descending (Latest first) to handle amendments or duplicates
     candidates.sort(key=lambda x: _parse_date(x.get("filing_date")), reverse=True)
     
-    return candidates[0]
+    return candidates[-1]
 
 def find_secondary_anchor(ticker: str, k10_filing_date: str, root: Path = DEFAULT_ROOT) -> Optional[Dict]:
     """
