@@ -6,7 +6,7 @@ from datetime import date
 class CorporateStrategy(BaseModel):
     stated_strategic_pillars: List[str] = Field(
         default_factory=list,
-        description="List of top-level headers identified in the 'Strategy' section."
+        description="List of key strategic pillars, goals, or objectives explicitly mentioned in the text (e.g., 'Improve Customer Experience', 'Expand Services Ecosystem'). Do NOT list generic document headers like 'Products' or 'Competition'."
     )
     business_overview_text: Optional[str] = Field(
         None,

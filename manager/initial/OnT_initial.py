@@ -8,7 +8,7 @@ from typing import Optional, Dict
 
 # --- INTERNAL MODULES ---
 from utils.fetching import iter_filing_metadata
-from utils.gather_requirement_LnO import find_anchor_10k
+from utils.gather_requirement import find_anchor_10k
 from schema.operation_and_technology_schema import OpsTechnologyFacet
 from heuristic_process.OnT_heuristic_fetching import (
     fetching_ONT_from_10K, 
